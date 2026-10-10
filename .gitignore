@@ -1,0 +1,19 @@
+__pycache__/
+*.pyc
+.venv/
+out/
+dist/
+# corpora and intermediate data (download / regenerate, see docs/训练指南.md)
+data/*/
+!data/mixd/
+data/*.json
+data/*.jsonl
+# training outputs and caches
+t44k/model*/
+t44k/ta_*/
+t44k/cse_cache/
+t44k/*.npz
+models/*_retrained/
+
+# export marker of tools_make_oss.py
+.oss_export

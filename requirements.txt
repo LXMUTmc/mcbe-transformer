@@ -1,0 +1,3 @@
+numpy>=1.24
+torch>=2.3          # training only; CUDA build recommended (pip install torch --index-url https://download.pytorch.org/whl/cu128)
+pypinyin>=0.50      # pinyin keyboard

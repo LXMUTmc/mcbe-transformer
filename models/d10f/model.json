@@ -1,0 +1,19 @@
+{
+ "name": "d10f",
+ "config": "t10m",
+ "params": 9658368,
+ "dialog": true,
+ "penalty": 148,
+ "training": {
+  "steps": 160000,
+  "batch": 256,
+  "zero_frac": 0.7,
+  "data": "data/mix64d (DeepSeek teacher 40% + zh Wikipedia 15%) + data/dialog64f (LCCC base de-dulled + mined LCCC QA, 45%)"
+ },
+ "quality": {
+  "val_loss_teacher": 2.5141,
+  "int_top1": 0.4553
+ },
+ "licence": "research / non-commercial only (trained on LCCC, whose authors restrict it to research); see DATA_AND_MODEL.md",
+ "title": "MCBE Transformer T10M 对话版"
+}
