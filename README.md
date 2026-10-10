@@ -45,26 +45,36 @@
 
 ### 2. 装进你自己的世界（不需要任何开发工具）
 
-1. 下载 `d10f.mcpack`（国际版），或 `d10f_netease.zip`（网易 MC Studio 组件）。
-2. 新建一个**超平坦**世界，开启作弊，挂上这个行为包。
-3. 在聊天栏输入 `/function mct/install`。模型分 15 批自动加载，每批游戏会卡几秒到几十秒。
-4. 看到"模型已装好"后，站到空地上**面朝南**，输入 `/function mct/keyboard`。
-5. 按 **初始化**。
+**自动安装（推荐，v1.1 起）**：
+1. 下载 `d10f_auto_netease.zip`（网易 MC Studio 组件）或 `d10f_auto.mcpack`（国际版）。
+2. 新建一个**超平坦**世界，开启作弊，挂上它，进入世界。
+3. 什么都不用输入。15 秒后自动开始安装，游戏会卡十几次；装好后键盘出现在你面前，并自动初始化。
+
+**手动安装**：用 `d10f_netease.zip` 或 `d10f.mcpack`。
+1. 新世界里输入 `/function mct/install`。
+2. 看到"模型已装好"后，面朝南输入 `/function mct/keyboard`。
+3. 按 **初始化**。
 
 装好以后可以移除这个行为包，世界里只剩原版方块。
 
-### 3. 自己训练、自己部署
+### 3. 训练你自己的模型：训练工坊（v1.1 起）
+
+一个窗口程序：选语料（维基、LCCC 对话、DeepSeek 老师语料、你自己的文本，任意组合）、选模型大小，点"开始"。它会依次准备语料、训练（可以暂停、续训）、逐整数核对，最后直接生成能装进游戏的存档和行为包。训练好后还能先在电脑上试聊。
+
+1. 安装 Python 3.10+，双击 `安装环境.bat`（会装 PyTorch，约 3 GB）。
+2. 双击 `启动工坊.bat`。
+
+用法见 [训练工坊使用说明](docs/训练工坊使用说明.md)。实测：工坊用免费配方（LCCC + 维基）训出的 T4M，装进网易版后自检逐整数 PASS。
+
+命令行用法：
 
 ```bash
-pip install -r requirements.txt
+python -m t44k.project run projects/NAME/project.json   # 工坊背后的流水线
 python -m t44k.pipeline build models/d10f out/d10f --check
-python -m t44k.pipeline train d10f --dry-run
+python -m t44k.pipeline train d10f --dry-run             # 发布模型的完整训练配方
 ```
 
-- 第二行：把发布的权重编译成行为包，并核对整数一致。
-- 第三行：列出重新训练这个模型的完整步骤。
-
-数据从哪里下载、要花多少钱和时间、怎么换成更小的模型，都在 [训练指南](docs/训练指南.md) 里。
+数据从哪里下载、要花多少钱和时间，都在 [训练指南](docs/训练指南.md) 里。
 
 ## 它是怎么工作的
 

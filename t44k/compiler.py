@@ -41,8 +41,8 @@ def tell(text):
 
 # register names -------------------------------------------------------------
 # NetEase's sensitive-word filter silently drops commands whose score-holder NAME contains
-# certain digit sequences once separators are removed (measured: 'K0_7_31', 'K0_9_18',
-# 'a6_4_89', 'a89p64', 'a8964' are dropped). Indices are therefore separated by LETTERS, and
+# certain digit sequences once separators are removed (measured in-game; the patterns are in
+# netease_lint.NAME_RISKY). Indices are therefore separated by LETTERS, and
 # every name the compiler emits is probed in-game before a build (t44k/ingame).
 def nK(l, p, i): return f"K{l}p{p}d{i}"
 def nV(l, p, i): return f"V{l}p{p}d{i}"
@@ -130,7 +130,7 @@ class Compiler:
     @staticmethod
     def safe_set(name, v):
         """'set name v', or 'set name v-y' + 'add name y' when the number would contain a NetEase
-        filtered digit sequence (packed constants such as 9896429 do: the command is silently dropped)"""
+        filtered digit sequence (some packed constants do: the command is silently dropped)"""
         import netease_lint
         bad = lambda cmd: netease_lint._pat.search(cmd)
         if not bad(sp(name, v)):

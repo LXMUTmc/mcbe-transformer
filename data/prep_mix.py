@@ -48,9 +48,15 @@ def main():
     ap.add_argument("--no-wiki", action="store_true")
     ap.add_argument("--vocab-file", default=None, help="reuse this vocab.json instead of choosing a new one")
     ap.add_argument("--maxlen", type=int, default=31, help="sample length limit = context - 1 (64-context models: 63)")
+    ap.add_argument("--wiki-only", action="store_true",
+                    help="no teacher text: Wikipedia alone as train.txt / val.txt (one corpus for train.py --mix; needs --vocab-file)")
+    ap.add_argument("--wiki-file", default=os.path.join(HERE, "wiki_raw.json"))
     a = ap.parse_args()
     import prep_wiki
     prep_wiki.MAXLEN = a.maxlen                          # samples_of() packs Wikipedia sentences up to this
+    if a.wiki_only:
+        assert a.vocab_file and not a.no_wiki, "--wiki-only needs --vocab-file"
+        a.teacher = []
 
     rows = []
     for d, r in teacher_rows(a.teacher):
@@ -101,7 +107,8 @@ def main():
     json.dump({"vocab": vocab, "source": {"teacher": teacher_src, "aux": WIKI_SOURCE}},
               open(os.path.join(a.out, "vocab.json"), "w", encoding="utf-8"), ensure_ascii=False)
     for name, lines in (("train.txt", train), ("val.txt", val)):
-        open(os.path.join(a.out, name), "w", encoding="utf-8").write("\n".join(lines) + "\n")
+        if not a.wiki_only:
+            open(os.path.join(a.out, name), "w", encoding="utf-8").write("\n".join(lines) + "\n")
     st = {"teacher": teacher_src, "teacher_raw": len(rows), "teacher_train": len(train), "teacher_val": len(val),
           "teacher_rejected": dict(why), "teacher_distinct_chars": len(freq),
           "vocab_char_coverage_teacher": round(sum(freq[c] for c in cs) / max(1, tot), 4),
@@ -112,7 +119,7 @@ def main():
 
     if not a.no_wiki:
         per_art = []
-        for text in articles(os.path.join(HERE, "wiki_raw.json")):
+        for text in articles(a.wiki_file):
             k = []
             for s in samples_of(text):
                 # same <UNK> density as the 31-character cut: longer samples may carry proportionally more
@@ -128,8 +135,9 @@ def main():
         wv = [s for x in per_art[:n_val] for s in x]
         wt = [s for x in per_art[n_val:] for s in x]
         random.Random(1).shuffle(wt)
-        open(os.path.join(a.out, "aux_train.txt"), "w", encoding="utf-8").write("\n".join(wt) + "\n")
-        open(os.path.join(a.out, "aux_val.txt"), "w", encoding="utf-8").write("\n".join(wv) + "\n")
+        tn, vn = ("train.txt", "val.txt") if a.wiki_only else ("aux_train.txt", "aux_val.txt")
+        open(os.path.join(a.out, tn), "w", encoding="utf-8").write("\n".join(wt) + "\n")
+        open(os.path.join(a.out, vn), "w", encoding="utf-8").write("\n".join(wv) + "\n")
         st.update({"aux": WIKI_SOURCE, "aux_train": len(wt), "aux_val": len(wv), "aux_train_chars": sum(map(len, wt)),
                    "aux_unk_share": round(sum(s.count(UNK_CH) for s in wt) / max(1, sum(map(len, wt))), 4)})
         print({k: st[k] for k in ("aux_train", "aux_val", "aux_train_chars", "aux_unk_share")})

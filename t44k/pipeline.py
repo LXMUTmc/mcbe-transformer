@@ -70,9 +70,35 @@ def build(model, out, tag=None, check=False, mem=11):
         run(["t44k.pack", ex, m7, pk, "--tag", tag, "--name", m.get("title", f"MCBE Transformer {tag}")], mem,
             log=os.path.join(out, "pack.log"))
     run(["t44k.pack", "--verify", pk, ex, m7], mem, log=os.path.join(out, "verify.log"))
-    print(f"\nready: {os.path.join(pk, tag + '.mcpack')}  (NetEase: {tag}_netease.zip)\n"
-          "in a NEW flat world with cheats on: /function mct/install, wait for 安装完成, "
-          "then /function mct/keyboard (face south) and press 初始化")
+    title = m.get("title", f"MCBE Transformer {tag}")
+    pa = os.path.join(out, "pack_auto")
+    if not os.path.exists(os.path.join(pa, f"{tag}_auto.mcpack")):
+        run(["t44k.pack", ex, m7, pa, "--tag", tag, "--name", title + "（自动安装）", "--auto"], mem,
+            log=os.path.join(out, "pack_auto.log"))
+    res = os.path.join(out, "输出")
+    os.makedirs(res, exist_ok=True)
+    world = os.path.join(res, f"{tag}.mcworld")
+    if not os.path.exists(world):
+        run(["-m", "t44k.world_build", pa, world, "--name", title], None, log=os.path.join(out, "world.log"))
+    for src, dst in ((os.path.join(pa, f"{tag}_auto_netease.zip"), f"{tag}_网易版组件_自动安装.zip"),
+                     (os.path.join(pa, f"{tag}_auto.mcpack"), f"{tag}_国际版行为包_自动安装.mcpack"),
+                     (os.path.join(pk, f"{tag}_netease.zip"), f"{tag}_网易版组件_手动安装.zip"),
+                     (os.path.join(pk, f"{tag}.mcpack"), f"{tag}_国际版行为包_手动安装.mcpack")):
+        shutil.copy(src, os.path.join(res, dst))
+    open(os.path.join(res, "怎么用.txt"), "w", encoding="utf-8").write(USAGE.format(tag=tag))
+    print(f"\nready: {res}")
+
+
+USAGE = """网易版（MC Studio）：
+  1. 导入 {tag}_网易版组件_自动安装.zip
+  2. 新建超平坦世界、开启作弊，挂上这个组件，进入世界
+  3. 什么都不用做：15 秒后自动安装（游戏会卡十几次），装好后键盘出现在你面前，并自动初始化
+国际版：
+  双击 {tag}.mcworld 导入，打开世界后同样会自动安装
+  （或：双击 {tag}_国际版行为包_自动安装.mcpack，挂到新建的超平坦世界上）
+手动安装版（_手动安装）：新世界里输入 /function mct/install，装好后面朝南输入 /function mct/keyboard，再按 初始化
+使用：字母键打拼音，数字键选字，按 发送；看到屏幕下方提示变了再按下一个键；按 自检 可以逐整数核对；存档退出前先按 关机
+"""
 
 
 # ---------------------------------------------------------------- train recipes

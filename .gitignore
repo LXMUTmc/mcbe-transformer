@@ -17,3 +17,5 @@ models/*_retrained/
 
 # export marker of tools_make_oss.py
 .oss_export
+# training studio projects (corpora, checkpoints, builds)
+projects/

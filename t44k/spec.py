@@ -25,6 +25,7 @@ CONFIGS = {
     "t7m":  dict(V=1024, T=64, D=320, H=8, DH=40, F=960, L=6),    # ~6.8M params (scaling study)
     "t10m": dict(V=1024, T=64, D=384, H=8, DH=48, F=1152, L=6),   # ~9.6M params (scaling study)
     "t4m12": dict(V=1024, T=64, D=256, H=8, DH=32, F=768, L=12),  # 12 layers: cross-layer sharing study (train --share 6)
+    "mini": dict(V=1024, T=64, D=64, H=4, DH=16, F=192, L=2),     # ~217K params: pipeline smoke tests and quick demos
 }
 CONFIG = "t44k"
 BOS, EOS = 1, 2

@@ -151,6 +151,14 @@ def real_prompts(n, config="t1m", n_chars=2):
             out.append([S.BOS] + [idx[c] for c in p])
         if len(out) == n:
             break
+    if len(out) < n:            # no clean line that long: the longest clean prefixes instead
+        ok_c = lambda c: c in idx and idx[c] >= 4
+        pre = lambda s: s[:next((i for i, c in enumerate(s) if not ok_c(c)), len(s))][:n_chars]
+        for p in sorted((pre(s) for s in val), key=len, reverse=True):
+            if len(p) >= 2 and [S.BOS] + [idx[c] for c in p] not in out:
+                out.append([S.BOS] + [idx[c] for c in p])
+            if len(out) == n:
+                break
     return out
 
 
@@ -195,7 +203,9 @@ def main(config, n_prompts=2, stats_only=False, budget=60000, trained=False, reg
     if stats_only:
         return True
     prompts = real_prompts(n_prompts, config, n_chars) if trained else S.random_prompts(n_prompts, seed=7, max_len=3)
-    ok = True
+    ok = bool(prompts)          # a check that ran nothing is not a PASS
+    if not prompts:
+        print("  no test prompt could be built from the validation text")
     for div_mode in ("trunc", "floor"):
         mism, faults, seqbad, fw, eff = {}, 0, 0, 0, 0
         for p in prompts:

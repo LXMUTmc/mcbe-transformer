@@ -185,6 +185,37 @@ def mixed_batch(main, aux, frac, batch, device, extra=None, extra_frac=0.0):
     return torch.cat(parts) if len(parts) > 1 else parts[0]
 
 
+def mixed_batch_n(stores, fracs, batch, device):
+    """rows from several stores (on device), store k contributing round(batch * fracs[k]) rows (the
+    first store takes the rounding remainder)"""
+    n = [int(round(batch * f)) for f in fracs]
+    n[0] = batch - sum(n[1:])
+    parts = [st[torch.randint(0, len(st), (k,), device=device)] for st, k in zip(stores, n) if k > 0]
+    return torch.cat(parts) if len(parts) > 1 else parts[0]
+
+
+def load_mix(specs, vocab_path=None):
+    """--mix DIR=FRAC ...: every DIR has train.txt / val.txt in one vocabulary (vocab_path, or the first
+    DIR's vocab.json). Returns vocab and [(name, frac, train, val, is_dialogue)]; a source is dialogue
+    when its text separates turns with '|'."""
+    pairs = []
+    for sp in specs:
+        d, f = sp.rsplit("=", 1)
+        pairs.append((d, float(f)))
+    tot = sum(f for _, f in pairs)
+    vocab = json.load(open(vocab_path or os.path.join(pairs[0][0], "vocab.json"), encoding="utf-8"))["vocab"]
+    assert len(vocab) == S.V, f"vocabulary {len(vocab)} != model V {S.V}"
+    idx = {c: i for i, c in enumerate(vocab)}
+    idx[UNK_CH] = UNK
+    idx[TURN] = S.EOS
+    out = []
+    for d, f in pairs:
+        head = "".join(l for _, l in zip(range(2000), open(os.path.join(d, "train.txt"), encoding="utf-8")))
+        out.append((os.path.basename(os.path.normpath(d)), f / tot, encode(os.path.join(d, "train.txt"), idx),
+                    encode(os.path.join(d, "val.txt"), idx), TURN in head))
+    return vocab, out
+
+
 def load_extra(data_dir, vocab):
     """an extra corpus (e.g. data/dialog64d from prep_dialog.py) encoded with the main vocabulary"""
     idx = {c: i for i, c in enumerate(vocab)}
@@ -223,17 +254,31 @@ def main():
     ap.add_argument("--extra", default=None, help="extra corpus dir (train.txt/val.txt, same vocabulary), e.g. data/dialog64d")
     ap.add_argument("--extra-frac", type=float, default=0.0, help="share of each batch from --extra")
     ap.add_argument("--share", type=int, default=None, help="distinct weight sets for the L layers (cross-layer sharing)")
+    ap.add_argument("--mix", nargs="+", default=None, metavar="DIR=FRAC",
+                    help="train on several corpora at once (replaces --data/--aux-frac/--extra), e.g. "
+                         "--mix data/mix64d=0.4 data/wiki64=0.15 data/dialog64f=0.45")
+    ap.add_argument("--vocab", default=None, help="--mix: vocabulary file (default: the first DIR's vocab.json)")
+    ap.add_argument("--resume", action="store_true", help="continue from OUT/ckpt.pt if it exists")
+    ap.add_argument("--ckpt-every", type=int, default=2000, help="save OUT/ckpt.pt every N steps")
     a = ap.parse_args()
     S.configure(a.config)
     out_dir = a.out or os.path.join(HERE, "model" if a.config == "t44k" else f"model_{a.config}")
     torch.manual_seed(a.seed); random.seed(a.seed)
     rng = np.random.default_rng(a.seed)
-    vocab, train, val, aux, _ = load_data(a.data, aux=True)
-    if a.aux_frac and aux is None:
-        raise SystemExit("--aux-frac needs aux_train.txt in --data")
-    extra = extra_val = None
-    if a.extra:
-        extra, extra_val = load_extra(a.extra, vocab)
+    mix = None
+    if a.mix:
+        vocab, mix = load_mix(a.mix, a.vocab)
+        train, val, aux = mix[0][2], mix[0][3], None
+        dlg = [m for m in mix if m[4]]
+        extra, extra_val = (dlg[0][2], dlg[0][3]) if dlg else (None, None)
+        print("mix: " + ", ".join(f"{n} {f:.2f} ({len(t):,} seqs{', dialogue' if d else ''})" for n, f, t, _, d in mix))
+    else:
+        vocab, train, val, aux, _ = load_data(a.data, aux=True)
+        if a.aux_frac and aux is None:
+            raise SystemExit("--aux-frac needs aux_train.txt in --data")
+        extra = extra_val = None
+        if a.extra:
+            extra, extra_val = load_extra(a.extra, vocab)
     teacher = None
     if a.teacher:
         from t44k.train_ta import load_ta
@@ -243,11 +288,37 @@ def main():
     model = T44K(a.zero_frac, a.share).to(a.device)
     if a.tf32:
         torch.backends.cuda.matmul.allow_tf32 = True
-    fwd = torch.compile(model) if a.compile else model      # export() and the integer checks use the plain module
     opt = torch.optim.AdamW(model.parameters(), lr=a.lr, weight_decay=0.0)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=a.lr, total_steps=a.steps, pct_start=0.05)
     val_eval = val[:8192]                                   # a fixed subset, evaluated in chunks
-    log, t0 = [], time.time()
+    log, t0, start = [], time.time(), 1
+    os.makedirs(out_dir, exist_ok=True)
+    ckpt, stop_file = os.path.join(out_dir, "ckpt.pt"), os.path.join(out_dir, "STOP")
+    if a.resume and os.path.exists(ckpt):
+        st = torch.load(ckpt, map_location=a.device, weights_only=False)
+        assert st["steps"] == a.steps and st["config"] == a.config, "checkpoint from a different run (steps / config)"
+        model.load_state_dict(st["model"]); opt.load_state_dict(st["opt"]); sched.load_state_dict(st["sched"])
+        log, start, t0 = st["log"], st["step"] + 1, time.time() - st["elapsed"]
+        torch.set_rng_state(st["rng"].cpu())               # map_location moved the RNG states too
+        if st.get("cuda_rng") is not None and a.device.startswith("cuda"):
+            torch.cuda.set_rng_state(st["cuda_rng"].cpu())
+        print(f"resumed at step {st['step']} ({st['elapsed'] / 3600:.2f} h done)")
+    fwd = torch.compile(model) if a.compile else model      # export() and the integer checks use the plain module
+
+    def save_ckpt(step):
+        st = {"model": model.state_dict(), "opt": opt.state_dict(), "sched": sched.state_dict(), "step": step,
+              "steps": a.steps, "config": a.config, "log": log, "elapsed": time.time() - t0, "rng": torch.get_rng_state(),
+              "cuda_rng": torch.cuda.get_rng_state() if a.device.startswith("cuda") else None}
+        torch.save(st, ckpt + ".tmp")
+        os.replace(ckpt + ".tmp", ckpt)
+
+    def progress(status, step, loss=None):
+        el = time.time() - t0
+        done = max(1, step - (start - 1))
+        rate = (time.time() - t_run) / done
+        json.dump({"status": status, "step": step, "steps": a.steps, "elapsed_s": round(el), "eta_s": round(rate * (a.steps - step)),
+                   "train_loss": loss, "last_eval": log[-1] if log else None},
+                  open(os.path.join(out_dir, "progress.json"), "w", encoding="utf-8"), ensure_ascii=False)
     print(f"device {a.device}, train {len(train)} seqs, val {len(val)}, vocab {len(vocab)}")
 
     def evaluate(store=None):
@@ -265,12 +336,17 @@ def main():
         return tot_loss / n, hit / n
 
     train_dev = torch.from_numpy(train).to(a.device)        # int16 store on the GPU (~90 MB for T1M)
-    aux_dev = torch.from_numpy(aux).to(a.device) if a.aux_frac else None
-    extra_dev = torch.from_numpy(extra).to(a.device) if extra is not None and a.extra_frac else None
+    aux_dev = torch.from_numpy(aux).to(a.device) if a.aux_frac and not mix else None
+    extra_dev = torch.from_numpy(extra).to(a.device) if extra is not None and a.extra_frac and not mix else None
+    mix_dev = [torch.from_numpy(m[2]).to(a.device) for m in mix] if mix else None
     na_dev = notallowed.to(a.device)
-    for step in range(1, a.steps + 1):
-        xb, yb, mb = batchify(mixed_batch(train_dev, aux_dev, a.aux_frac, a.batch, a.device, extra_dev, a.extra_frac),
-                              a.device, with_mask=True)
+    t_run = time.time()
+    for step in range(start, a.steps + 1):
+        if mix:
+            rows = mixed_batch_n(mix_dev, [m[1] for m in mix], a.batch, a.device)
+        else:
+            rows = mixed_batch(train_dev, aux_dev, a.aux_frac, a.batch, a.device, extra_dev, a.extra_frac)
+        xb, yb, mb = batchify(rows, a.device, with_mask=True)
         lg = fwd(xb).masked_fill(na_dev, -1e9)
         loss = F.cross_entropy(lg.reshape(-1, S.V), yb.reshape(-1), ignore_index=-100)
         if teacher is not None:
@@ -283,16 +359,29 @@ def main():
         if step % 500 == 0 or step == a.steps:
             vl, va = evaluate()
             e = {"step": step, "train_loss": round(loss.item(), 4), "val_loss": round(vl, 4), "val_acc": round(va, 4)}
+            if mix:
+                for n, _, _, v, _ in mix[1:]:
+                    e[f"val_{n}"] = [round(x, 4) for x in evaluate(v[:4096])]
             if extra_val is not None:
                 e["extra_val_loss"], e["extra_val_acc"] = (round(x, 4) for x in evaluate(extra_val[:8192]))
             log.append(e)
             print(f"step {step:6d}  train {loss.item():.3f}  val {vl:.3f}  val top-1 {va:.3f}"
                   + (f"  dialog {e['extra_val_loss']:.3f} / {e['extra_val_acc']:.3f}" if extra_val is not None else "")
                   + f"  ({time.time() - t0:.0f}s)", flush=True)
+        if step % 100 == 0 or step == a.steps:
+            progress("running", step, round(loss.item(), 4))
+        if step % a.ckpt_every == 0 and step < a.steps:
+            save_ckpt(step)
+        if step % 100 == 0 and os.path.exists(stop_file) and step < a.steps:
+            save_ckpt(step)
+            os.remove(stop_file)
+            progress("paused", step, round(loss.item(), 4))
+            print(f"paused at step {step}: rerun with --resume to continue", flush=True)
+            return
 
     if a.bench:
         return
-    os.makedirs(out_dir, exist_ok=True)
+    progress("exporting", a.steps)
     q = model.export(allowed)
     # calibrate the RMSNorm LUTs on training prompts (integer model), then measure integer accuracy
     n_cal, n_eval = (3000, 400) if S.D <= 32 else (2000, 400) if S.D <= 128 else (1000, 200)   # T1M: ~5 ms per integer step
@@ -325,6 +414,7 @@ def main():
     json.dump({"args": vars(a), "log": log, "int_val_top1": round(int_acc, 4), "samples": samples,
                "constants": {k: q[k] for k in ("ATTDIV", "MO", "M2", "R")}, "vocab_size": len(vocab)},
               open(os.path.join(out_dir, "train_log.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
+    progress("done", a.steps)
     print(f"integer model val top-1 {int_acc:.3f} (float {log[-1]['val_acc']:.3f})")
     print("samples:", *samples, sep="\n  ")
 

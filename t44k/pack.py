@@ -229,6 +229,36 @@ def functions(tag, tiles, meta, chain_rule, kb_offset, n_blocks):
     return fs
 
 
+def auto_functions(info):
+    """auto-install variant (pack.py --auto, and every world from t44k/world_build.py): the pack installs
+    itself the first time a world with it is opened, then places the keyboard where the nearest player
+    stands (as /function mct/keyboard would) and presses 初始化. Overrides tick / done, adds autostart."""
+    tag, k = info["tag"], len(info["tiles"])
+    off, ip = info["keyboard_offset"], info["init_power"]
+    assert ip, "auto install needs the keyboard (build the pack with an M7 directory)"
+    # Start only after a player has been in the world for WAIT ticks: on NetEase the integrated server
+    # ticks while the client is still loading the world, and starting the installer then (ticking area +
+    # 260K command blocks per tick) crashed the game twice during the loading screen (2026-10-10).
+    WAIT = 300
+    tick = ["scoreboard objectives add mctl dummy",           # fails harmlessly once it exists
+            "scoreboard players add boot mctl 0",
+            f"execute if score boot mctl matches 0..{WAIT - 1} if entity @a run scoreboard players add boot mctl 1",
+            "execute if score boot mctl matches 1 run " + tellraw(f"§e[MCT] 首次进入：{WAIT // 20} 秒后开始自动安装模型（期间游戏会卡住十几次，请不要关闭游戏）"),
+            f"execute if score boot mctl matches {WAIT} run function mct/autostart",
+            "execute if score on mctl matches 1 run function mct/load"]
+    autostart = [f"scoreboard players set boot mctl {WAIT + 1}", "function mct/install"]
+    done = ["scoreboard players set on mctl 0", f"structure delete mct:{tag}_{k - 1:02d}",
+            "execute as @p at @s run structure load mct:{}_kb ~{} ~{} ~{}".format(tag, *off),
+            "setblock {} {} {} redstone_block".format(*ip),
+            tellraw("§a[MCT] 模型已装好，键盘放在你前方（南边）。聊天栏出现“初始化完成”后就可以聊天了"),
+            tellraw("§7[MCT] 用法：字母键打拼音，数字键选字，按 发送；看到屏幕下方提示变了再按下一个键；退出前先按 关机"),
+            tellraw("§7[MCT] 想把键盘放到别处：站好、面朝南，输入 /function mct/keyboard")]
+    fs = {"tick": tick, "autostart": autostart, "done": done}
+    for n, c in fs.items():
+        netease_lint.check(c, f"auto function {n}")
+    return fs
+
+
 # ---------------------------------------------------------------- build
 def _uuid(s):
     return str(uuid.UUID(hashlib.md5(s.encode()).hexdigest()))
@@ -245,7 +275,11 @@ def zip_dir(src, zpath, prefix=""):
                 zf.write(p, os.path.join(prefix, os.path.relpath(p, src)).replace("\\", "/"))
 
 
-def build(export_dir, m7_dir, out_dir, tag, name):
+def build(export_dir, m7_dir, out_dir, tag, name, auto=False):
+    """auto: the pack installs itself when a world with it is opened (auto_functions); its own UUID and
+    file names (<tag>_auto.*), so it never replaces the manual pack in a game"""
+    uid = f"mct-{tag}" + ("-auto" if auto else "")
+    stem = tag + ("_auto" if auto else "")
     assert re.match(r"^[a-z][a-z0-9_]*$", tag), "tag: lowercase letters, digits, _"
     meta = json.load(open(os.path.join(export_dir, "meta.json"), encoding="utf-8"))
     blocks, m7 = read_blocks(export_dir, m7_dir)
@@ -272,40 +306,45 @@ def build(export_dir, m7_dir, out_dir, tag, name):
         kb_offset = (5 + lo[0], lo[1], 3 + lo[2])
         size = [max(p[i] for p in cells) + 1 for i in range(3)]
         open(os.path.join(sdir, f"{tag}_kb.mcstructure"), "wb").write(structure_bytes(size, cells))
+    info = {"tag": tag, "auto": auto, "model_hash": meta["model_hash"], "config": meta["config"], "params": meta["params"],
+            "blocks": len(blocks), "tiles": [{"origin": o, "size": s, "blocks": len(c)} for o, s, c in tiles],
+            "ticking_area": ta, "gamerule_maxcommandchainlength": chain_rule, "keyboard_offset": kb_offset,
+            "init_power": m7["init_power"] if m7 else None, "pack_uuid": _uuid(uid + "-bp"),
+            "pack_version": PACK_VERSION, "label": f"{meta['config'].upper()}"}
     fs = functions(tag, tiles, meta, chain_rule, kb_offset, len(blocks))
     if not m7:
         del fs["keyboard"]
+    if auto:
+        fs.update(auto_functions(info))
     for fn, cmds in fs.items():
         open(os.path.join(fdir, fn + ".mcfunction"), "w", encoding="utf-8", newline="\n").write("\n".join(cmds) + "\n")
     json.dump({"values": ["mct/tick"]}, open(os.path.join(bp, "functions", "tick.json"), "w"))
     man = {"format_version": 2,
            "header": {"name": name, "description": f"{meta['params']:,} 参数三值 Transformer（原版命令方块 + 记分板），{len(blocks):,} 个方块；"
-                                                    "新建超平坦世界后输入 /function mct/install",
-                      "uuid": _uuid(f"mct-{tag}-bp"), "version": PACK_VERSION, "min_engine_version": [1, 20, 0]},
-           "modules": [{"type": "data", "uuid": _uuid(f"mct-{tag}-bp-data"), "version": PACK_VERSION}]}
+                                                    + ("挂在新建的超平坦世界上，进入后自动安装（只装一次）" if auto else
+                                                       "新建超平坦世界后输入 /function mct/install"),
+                      "uuid": _uuid(uid + "-bp"), "version": PACK_VERSION, "min_engine_version": [1, 20, 0]},
+           "modules": [{"type": "data", "uuid": _uuid(uid + "-bp-data"), "version": PACK_VERSION}]}
     for fn in ("manifest.json", "pack_manifest.json"):
         json.dump(man, open(os.path.join(bp, fn), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-    info = {"tag": tag, "model_hash": meta["model_hash"], "config": meta["config"], "params": meta["params"],
-            "blocks": len(blocks), "tiles": [{"origin": o, "size": s, "blocks": len(c)} for o, s, c in tiles],
-            "ticking_area": ta, "gamerule_maxcommandchainlength": chain_rule, "keyboard_offset": kb_offset}
     json.dump(info, open(os.path.join(out_dir, "pack_info.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    zip_dir(bp, os.path.join(out_dir, f"{tag}.mcpack"))
+    zip_dir(bp, os.path.join(out_dir, f"{stem}.mcpack"))
     # NetEase MC Studio component: root = behavior_pack_* + resource_pack_* (an empty resource pack is required)
     ne = os.path.join(out_dir, "_netease")
     shutil.rmtree(ne, ignore_errors=True)
-    shutil.copytree(bp, os.path.join(ne, f"behavior_pack_{tag}"))
-    os.makedirs(os.path.join(ne, f"behavior_pack_{tag}", "entities"))
-    rp = os.path.join(ne, f"resource_pack_{tag}")
+    shutil.copytree(bp, os.path.join(ne, f"behavior_pack_{stem}"))
+    os.makedirs(os.path.join(ne, f"behavior_pack_{stem}", "entities"))
+    rp = os.path.join(ne, f"resource_pack_{stem}")
     os.makedirs(os.path.join(rp, "textures"))
     rman = {"format_version": 2,
-            "header": {"name": name + " RP", "description": "占位资源包（网易组件要求）", "uuid": _uuid(f"mct-{tag}-rp"),
+            "header": {"name": name + " RP", "description": "占位资源包（网易组件要求）", "uuid": _uuid(uid + "-rp"),
                        "version": PACK_VERSION, "min_engine_version": [1, 20, 0]},
-            "modules": [{"type": "resources", "uuid": _uuid(f"mct-{tag}-rp-res"), "version": PACK_VERSION}]}
+            "modules": [{"type": "resources", "uuid": _uuid(uid + "-rp-res"), "version": PACK_VERSION}]}
     for fn in ("manifest.json", "pack_manifest.json"):
         json.dump(rman, open(os.path.join(rp, fn), "w", encoding="utf-8"), ensure_ascii=False, indent=2)
-    zip_dir(ne, os.path.join(out_dir, f"{tag}_netease.zip"))
+    zip_dir(ne, os.path.join(out_dir, f"{stem}_netease.zip"))
     shutil.rmtree(ne)
-    print(f"{tag}: {len(blocks):,} blocks in {len(tiles)} tiles, gamerule maxcommandchainlength {chain_rule}, "
+    print(f"{stem}: {len(blocks):,} blocks in {len(tiles)} tiles, gamerule maxcommandchainlength {chain_rule}, "
           f"keyboard offset {kb_offset}; {out_dir}")
 
 
@@ -356,7 +395,10 @@ if __name__ == "__main__":
     if "--verify" in a:
         a.remove("--verify")
         verify(a[0], a[1], a[2] if len(a) > 2 else None)
-    elif len(a) == 3:
-        build(a[0], a[1], a[2], tag, name)
     else:
-        build(a[0], None, a[1], tag, name)
+        auto = "--auto" in a
+        a = [x for x in a if x != "--auto"]
+        if len(a) == 3:
+            build(a[0], a[1], a[2], tag, name, auto)
+        else:
+            build(a[0], None, a[1], tag, name, auto)

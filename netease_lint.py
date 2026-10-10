@@ -3,22 +3,27 @@ word: no error, no feedback, the command just does nothing (found the hard way: 
 scoreboard objective 'sb', and every command touching it vanished).
 
 check() runs over every command a build emits and fails the build on a risky substring.
-The list is conservative (pinyin insult abbreviations and the usual political numbers); add to
-it whenever the game swallows something.
+The list is conservative (pinyin insult abbreviations and words / digit strings the platform
+blocks); add to it whenever the game swallows something. The lists are stored base64-encoded
+so that this source file itself carries no filtered words (print RISKY / NAME_RISKY to see them).
 """
-import re
+import re, json, base64
 
-RISKY = ["sb", "cnm", "nmsl", "nmb", "tmd", "mlgb", "wcnm", "rnm", "sima", "gcd", "8964", "六四", "法轮"]
+
+def _dec(s):
+    return json.loads(base64.b64decode(s).decode("utf-8"))
+
+
+RISKY = _dec("WyJzYiIsICJjbm0iLCAibm1zbCIsICJubWIiLCAidG1kIiwgIm1sZ2IiLCAid2NubSIsICJybm0iLCAic2ltYSIsICJnY2QiLCAiODk2NCIsICLlha3lm5siLCAi5rOV6L2uIl0=")
 _pat = re.compile("|".join(re.escape(w) for w in RISKY), re.IGNORECASE)
 
 
 # Score-holder NAMES are filtered more aggressively (probably treated like player names), and
-# the filter seems to ignore separators. Measured in-game (2026-09-29): dropped
-#   K0_7_31, K0_9_18, K1_7_31, K1_9_18, a6_4_89, a89p64, a8964, bl, s0h0j8 / w1h3j8 (any '...j8')
-# while y731, y918, K0p7d31, K0p9d18, a64, a89, a1989 pass. The in-game probe of every name
-# (t44k ingame builder) is the authority; this list only catches known cases early.
-# "qq": every score holder 'qqqqqqqqqqqqq<n>' was rejected in-game (2026-10-02 micro-benchmark)
-NAME_RISKY = [r"j8", r"^bl$", r"8964", r"6489", r"_7_31", r"_9_18", r"89\D*64", r"qq"]
+# the filter seems to ignore separators: names whose digits form certain dates or numbers were
+# dropped even when split by '_' or a letter, as were 'bl', any '...j8' and 'qq...' (in-game
+# probes 2026-09-29 / 10-02). The in-game probe of every name (t44k ingame builder) is the
+# authority; this list only catches known cases early.
+NAME_RISKY = _dec("WyJqOCIsICJeYmwkIiwgIjg5NjQiLCAiNjQ4OSIsICJfN18zMSIsICJfOV8xOCIsICI4OVxcRCo2NCIsICJxcSJd")
 _npat = re.compile("|".join(NAME_RISKY), re.IGNORECASE)
 
 
